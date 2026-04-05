@@ -20,10 +20,16 @@ The installer will:
 
 ### After installing
 
-If you see a note about adding a line to your shell profile, follow those instructions, then restart your terminal. After that, run:
+Restart your terminal, then run:
 
 ```sh
 nasa
+```
+
+## Update
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/damyanmp/nasa-tracker/main/update.sh | sh
 ```
 
 ## Usage
