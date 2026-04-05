@@ -1,0 +1,21 @@
+[project]
+name = "nasa-tracker"
+version = "0.1.0"
+description = "NASA / space mission tracking CLI — ISS, Artemis, deep space probes, Mars rovers, launches"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "rich>=13.0",
+    "textual>=0.89",
+    "typer>=0.12",
+]
+
+[project.scripts]
+nasa = "nasa_tracker.nasa:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nasa_tracker"]
