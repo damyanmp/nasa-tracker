@@ -574,9 +574,7 @@ def _build_artemis_panel(t: ArtemisTelemetry) -> Panel:
     return Panel(grid, title=title, border_style="blue", padding=(1, 2))
 
 
-def _build_iss_panel(t: ISSTelemetry) -> Panel:
-    from rich.columns import Columns
-
+def _build_iss_panel(t: ISSTelemetry, show_map: bool = False, map_width: int = 116) -> Panel:
     stats = Table.grid(padding=(0, 2))
     stats.add_column(style="dim", min_width=22)
     stats.add_column()
@@ -596,10 +594,13 @@ def _build_iss_panel(t: ISSTelemetry) -> Panel:
         stats.add_row("[yellow]Warning[/yellow]", t.error)
 
     from rich.text import Text as RichText
-    map_text = RichText.from_markup(_iss_map(t.lat, t.lon)) if (t.lat or t.lon) else None
-
     from rich.console import Group
-    body = Group(stats, map_text) if map_text else stats
+
+    if show_map and (t.lat or t.lon):
+        map_text = RichText.from_markup(_iss_map(t.lat, t.lon, width=map_width))
+        body = Group(stats, map_text)
+    else:
+        body = stats
 
     title = Text()
     title.append("International Space Station", style="bold white")
@@ -749,6 +750,15 @@ class _LaunchesWidget(Static):
         self.update(_build_launches_panel(launches))
 
 
+class _MapWidget(Static):
+    def on_mount(self) -> None:
+        self.update("[dim]⏳ Fetching ISS map…[/dim]")
+
+    def set_telemetry(self, t: ISSTelemetry) -> None:
+        map_w = max(80, self.app.size.width - 6)
+        self.update(_build_iss_panel(t, show_map=True, map_width=map_w))
+
+
 class NasaApp(App):
     """nasa tui — live NASA mission dashboard."""
 
@@ -796,17 +806,23 @@ class NasaApp(App):
         height: auto;
         margin-top: 1;
     }
+    #map_view {
+        display: none;
+        width: 100%;
+        height: 1fr;
+    }
     """
 
     BINDINGS = [
         ("q",         "quit",           "Quit"),
         ("r",         "refresh",        "Refresh"),
         ("shift+r",   "force_refresh",  "Force refresh"),
+        ("m",         "toggle_map",     "ISS Map"),
     ]
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with ScrollableContainer():
+        with ScrollableContainer(id="dashboard"):
             with Horizontal(id="row1"):
                 yield _ArtemisWidget(id="artemis")
                 yield _ISSWidget(id="iss")
@@ -814,6 +830,7 @@ class NasaApp(App):
                 yield _RoversWidget(id="rovers")
                 yield _LaunchesWidget(id="launches")
             yield _ProbesWidget(id="probes")
+        yield _MapWidget(id="map_view")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -831,6 +848,13 @@ class NasaApp(App):
         _cache_clear()
         self.refresh_data()
 
+    def action_toggle_map(self) -> None:
+        dashboard = self.query_one("#dashboard")
+        map_view  = self.query_one("#map_view", _MapWidget)
+        showing   = map_view.display
+        map_view.display  = not showing
+        dashboard.display = showing
+
     @textual_work(exclusive=True)
     async def refresh_data(self) -> None:
         artemis_t, iss_t, probes, rovers, launches = await asyncio.gather(
@@ -842,6 +866,7 @@ class NasaApp(App):
         )
         self.query_one("#artemis",  _ArtemisWidget).set_telemetry(artemis_t)
         self.query_one("#iss",      _ISSWidget).set_telemetry(iss_t)
+        self.query_one("#map_view", _MapWidget).set_telemetry(iss_t)
         self.query_one("#rovers",   _RoversWidget).set_rovers(rovers)
         self.query_one("#launches", _LaunchesWidget).set_launches(launches)
         self.query_one("#probes",   _ProbesWidget).set_probes(probes)
