@@ -443,7 +443,7 @@ async def fetch_upcoming_launches(n: int = 5) -> list[dict]:
             resp = await client.get(LAUNCH_API, timeout=10)
             resp.raise_for_status()
             results = resp.json().get("result", [])
-            launches = [r for r in results if r.get("win_open") or r.get("date_str")]
+            launches = [r for r in results if r.get("win_open") or r.get("t0") or r.get("date_str")]
             result = launches[:n]
         except Exception as e:
             result = [{"error": str(e)}]
@@ -689,7 +689,7 @@ def _build_launches_panel(launches: list[dict]) -> Panel:
             vehicle  = r.get("vehicle",  {}).get("name", "?")
             pad_loc  = r.get("pad", {}).get("location", {})
             pad      = f"{r.get('pad', {}).get('name', '?')}, {pad_loc.get('name', '?')}"
-            win      = r.get("win_open") or r.get("date_str") or "TBD"
+            win      = r.get("win_open") or r.get("t0") or r.get("date_str") or "TBD"
             if "T" in str(win):
                 try:
                     dt  = datetime.fromisoformat(win.replace("Z", "+00:00"))
