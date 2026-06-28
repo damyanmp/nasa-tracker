@@ -693,7 +693,7 @@ def _build_launches_panel(launches: list[dict]) -> Panel:
             if "T" in str(win):
                 try:
                     dt  = datetime.fromisoformat(win.replace("Z", "+00:00"))
-                    win = f"{dt.strftime('%b %d  %H:%M')} UTC  ({_local_str(dt)})"
+                    win = f"{dt.strftime('%b %d %Y  %H:%M')} UTC  ({_local_str(dt)})"
                 except ValueError:
                     pass
             tbl.add_row(name, provider, vehicle, pad, win)
