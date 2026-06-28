@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x /Users/damyan/Library/CloudStorage/SynologyDrive-Damyan/Workbench/nasa-tracker/install.sh)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
+    ]
+  }
+}
