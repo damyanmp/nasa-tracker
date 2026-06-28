@@ -108,7 +108,7 @@ ARTEMIS_MISSIONS: list[Mission] = [
         crewed=True,
         launch_utc=datetime(2026, 4, 1, 22, 35, 12, tzinfo=timezone.utc),
         splashdown_utc=datetime(2026, 4, 11, 0, 17, 0, tzinfo=timezone.utc),
-        status="active",
+        status="completed",
         crew=[
             "Reid Wiseman (CDR)",
             "Victor Glover (PLT)",
