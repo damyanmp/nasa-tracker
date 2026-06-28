@@ -677,26 +677,23 @@ def _build_launches_panel(launches: list[dict]) -> Panel:
             box=box.SIMPLE_HEAD, show_header=True, header_style="bold",
             show_edge=False, pad_edge=False,
         )
-        tbl.add_column("Launch",       min_width=32)
-        tbl.add_column("Provider",     min_width=18)
-        tbl.add_column("Vehicle",      min_width=14)
-        tbl.add_column("Pad",          min_width=18)
-        tbl.add_column("Window Open",  min_width=26)
+        tbl.add_column("Launch",    min_width=28)
+        tbl.add_column("Provider",  min_width=16)
+        tbl.add_column("Vehicle",   min_width=12)
+        tbl.add_column("Date (UTC)", min_width=16)
 
         for r in launches:
             name     = r.get("name", "?")
             provider = r.get("provider", {}).get("name", "?")
             vehicle  = r.get("vehicle",  {}).get("name", "?")
-            pad_loc  = r.get("pad", {}).get("location", {})
-            pad      = f"{r.get('pad', {}).get('name', '?')}, {pad_loc.get('name', '?')}"
             win      = r.get("win_open") or r.get("t0") or r.get("date_str") or "TBD"
             if "T" in str(win):
                 try:
                     dt  = datetime.fromisoformat(win.replace("Z", "+00:00"))
-                    win = f"{dt.strftime('%b %d %Y  %H:%M')} UTC  ({_local_str(dt)})"
+                    win = dt.strftime("%b %d %Y  %H:%M")
                 except ValueError:
                     pass
-            tbl.add_row(name, provider, vehicle, pad, win)
+            tbl.add_row(name, provider, vehicle, win)
         inner = tbl  # type: ignore[assignment]
 
     return Panel(inner, title="[bold]Upcoming Launches[/bold]", border_style="dim", padding=(0, 1))
