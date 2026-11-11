@@ -14,7 +14,7 @@ Commands
 Data sources
   NASA/JPL Horizons API      https://ssd.jpl.nasa.gov/api/horizons.api
   NASA Open API              https://api.nasa.gov  (set NASA_API_KEY env var)
-  open-notify.org            ISS realtime lat/lon
+  wheretheiss.at             ISS realtime lat/lon
   corquaid ISS APIs          People in space / current ISS crew
   rocketlaunch.live          Upcoming launch schedule
 """
@@ -73,7 +73,9 @@ AU_KM           = 149_597_870.7   # 1 AU in km
 C_KM_S          = 299_792.458     # speed of light, km/s
 ISS_NAIF_ID     = -125_544
 
-OPEN_NOTIFY_ISS  = "http://api.open-notify.org/iss-now.json"
+# open-notify's iss-now.json returns positions thousands of km off (checked
+# against CelesTrak TLE + SGP4, Nov 2026) — use wheretheiss.at instead.
+ISS_POS_API      = "https://api.wheretheiss.at/v1/satellites/25544"
 # open-notify's astros.json stopped updating in 2024 — use a maintained crew feed.
 CREW_API         = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
 LAUNCH_API       = "https://fdo.rocketlaunch.live/json/launch/next/10"
@@ -464,10 +466,11 @@ async def fetch_iss_telemetry() -> ISSTelemetry:
             _fetch_dist_speed(client, ISS_NAIF_ID, "500@399", at=now)
         )
         try:
-            resp = await client.get(OPEN_NOTIFY_ISS, timeout=8)
-            pos = resp.json().get("iss_position", {})
-            lat = float(pos.get("latitude", 0))
-            lon = float(pos.get("longitude", 0))
+            resp = await client.get(ISS_POS_API, timeout=8)
+            resp.raise_for_status()
+            pos = resp.json()
+            lat = float(pos["latitude"])
+            lon = float(pos["longitude"])
         except Exception as e:
             errors.append(f"lat/lon: {e}")
 
@@ -901,7 +904,7 @@ class NasaApp(App):
     """nasa tui — live NASA mission dashboard."""
 
     TITLE     = "NASA Mission Tracker"
-    SUB_TITLE = "JPL Horizons · NASA API · open-notify · rocketlaunch.live"
+    SUB_TITLE = "JPL Horizons · wheretheiss.at · Launch Library 2 · rocketlaunch.live"
 
     CSS = """
     Screen {

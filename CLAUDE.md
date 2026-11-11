@@ -40,7 +40,7 @@ nasa launches           # Upcoming launches
 | Source | Used for |
 |---|---|
 | JPL Horizons API (`ssd.jpl.nasa.gov/api/horizons.api`) | Spacecraft position/velocity vectors |
-| open-notify.org | ISS real-time lat/lon (its crew endpoint went stale in 2024 — don't use) |
+| api.wheretheiss.at | ISS real-time lat/lon (open-notify is unreliable for both position and crew — don't use) |
 | corquaid.github.io/international-space-station-APIs | Current ISS crew + expedition number |
 | Launch Library 2 (`ll.thespacedevs.com`, program 15) | Artemis missions: dates, status, crew. Free tier ~15 req/h → disk cache `~/.cache/nasa-tracker/artemis.json`, 6h TTL, stale cache reused offline |
 | rocketlaunch.live | Upcoming launch schedule |
