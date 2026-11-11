@@ -1,6 +1,6 @@
 [project]
 name = "nasa-tracker"
-version = "0.3.1"
+version = "0.3.2"
 description = "NASA / space mission tracking CLI — ISS, Artemis, deep space probes, Mars rovers, launches"
 requires-python = ">=3.11"
 dependencies = [

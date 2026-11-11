@@ -624,9 +624,14 @@ def _iss_map(lat: float, lon: float, width: int = 116) -> str:
     lines = []
     for line in raw.splitlines():
         if "✛" in line:
-            parts = line.split("✛")
+            # The ISS is often over land, where a plain cyan glyph disappears
+            # into the solid █ blocks. Clear a 1-cell gap either side and use a
+            # high-contrast badge so it stays visible on land and sea alike.
+            left, _, right = line.partition("✛")
+            left = left[:-1] + " " if left else left
+            right = " " + right[1:] if right else right
             lines.append(
-                f"[dim]{parts[0]}[/dim][bold cyan]✛[/bold cyan][dim]{'✛'.join(parts[1:])}[/dim]"
+                f"[dim]{left}[/dim][bold black on bright_yellow]✛[/][dim]{right}[/dim]"
             )
         else:
             lines.append(f"[dim]{line}[/dim]")
