@@ -12,6 +12,7 @@ Known spacecraft NAIF IDs
   -125544  International Space Station (ISS)
   -1023    Artemis I  / Orion EM-1  (2022-156A)
   -1024    Artemis II / Orion EM-2  (2026-069A, nickname "Integrity")
+  -49      Lucy           -255  Psyche          -159  Europa Clipper
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@
 
 Standalone CLI for NASA / space mission tracking, extracted from `pentagon-management/infrastructure/cli/` on 2026-04-05.
 
-**Location:** `~/nasa-tracker/`
+**Location:** wherever you cloned it (e.g. `~/repos/nasa-tracker/`)
 
 ## Structure
 
@@ -28,7 +28,8 @@ uv venv && uv pip install -e "."
 # Commands
 nasa                    # TUI dashboard
 nasa iss                # ISS position + world map
-nasa artemis status     # Live Artemis II telemetry
+nasa artemis status     # Current/latest Artemis mission telemetry
+nasa update             # Reinstall latest from GitHub via uv
 nasa probes             # Deep space probe fleet
 nasa rovers             # Mars rover status
 nasa launches           # Upcoming launches
@@ -39,7 +40,8 @@ nasa launches           # Upcoming launches
 | Source | Used for |
 |---|---|
 | JPL Horizons API (`ssd.jpl.nasa.gov/api/horizons.api`) | Spacecraft position/velocity vectors |
-| open-notify.org | ISS real-time lat/lon + crew |
+| open-notify.org | ISS real-time lat/lon (its crew endpoint went stale in 2024 — don't use) |
+| corquaid.github.io/international-space-station-APIs | Current ISS crew + expedition number |
 | rocketlaunch.live | Upcoming launch schedule |
 
 ## Key Design Decisions
@@ -58,3 +60,10 @@ nasa launches           # Upcoming launches
 
 - **Ask before every change** — no exceptions
 - **Never push to git** without showing diff and getting approval
+
+## Hand-maintained data (review when refreshing)
+
+`nasa.py` has three registries that do NOT update themselves: `ARTEMIS_MISSIONS`,
+`PROBES`, `ROVERS`. Check mission status/dates against NASA before releasing.
+Verify any new NAIF ID with a Horizons query ("Target body name" line) — e.g.
+Lucy is -49 (-234 is STEREO-A).

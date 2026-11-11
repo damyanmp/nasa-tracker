@@ -8,12 +8,14 @@ Commands
   nasa probes                Deep space probe fleet — distances & signal delays
   nasa rovers                Mars rover status (Curiosity & Perseverance)
   nasa launches [--n N]      Next N upcoming rocket launches
+  nasa update                Update nasa-tracker to the latest version from GitHub
   nasa tui                   Alias for bare `nasa`
 
 Data sources
   NASA/JPL Horizons API      https://ssd.jpl.nasa.gov/api/horizons.api
   NASA Open API              https://api.nasa.gov  (set NASA_API_KEY env var)
-  open-notify.org            ISS crew & realtime lat/lon
+  open-notify.org            ISS realtime lat/lon
+  corquaid ISS APIs          People in space / current ISS crew
   rocketlaunch.live          Upcoming launch schedule
 """
 from __future__ import annotations
@@ -71,7 +73,8 @@ C_KM_S          = 299_792.458     # speed of light, km/s
 ISS_NAIF_ID     = -125_544
 
 OPEN_NOTIFY_ISS  = "http://api.open-notify.org/iss-now.json"
-OPEN_NOTIFY_CREW = "http://api.open-notify.org/astros.json"
+# open-notify's astros.json stopped updating in 2024 — use a maintained crew feed.
+CREW_API         = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
 LAUNCH_API       = "https://fdo.rocketlaunch.live/json/launch/next/10"
 
 # ── Artemis mission registry ───────────────────────────────────────────────────
@@ -82,11 +85,12 @@ class Mission:
     name: str
     nickname: str
     crewed: bool
-    launch_utc: datetime
+    launch_utc: Optional[datetime]       # None until NASA sets a date
     splashdown_utc: Optional[datetime]
     status: str          # "upcoming" | "active" | "completed"
     crew: list[str] = field(default_factory=list)
     description: str = ""
+    window: str = ""     # target window for upcoming missions without a date
 
 
 ARTEMIS_MISSIONS: list[Mission] = [
@@ -117,7 +121,53 @@ ARTEMIS_MISSIONS: list[Mission] = [
         ],
         description="First crewed Artemis mission. 10-day free-return lunar flyby.",
     ),
+    # Artemis III was re-scoped in 2026 to a crewed low-Earth-orbit test flight:
+    # Orion rendezvous/docking with test versions of the commercial landers.
+    # Crew announced 2026-06-09; NASA target mid-2027 (no fixed date yet).
+    Mission(
+        naif_id=0,
+        name="Artemis III",
+        nickname="Orion + lander docking test (LEO)",
+        crewed=True,
+        launch_utc=None,
+        splashdown_utc=None,
+        status="upcoming",
+        crew=[
+            "Randy Bresnik (CDR)",
+            "Luca Parmitano (PLT, ESA)",
+            "Andre Douglas (MS)",
+            "Frank Rubio (MS)",
+        ],
+        description="Earth-orbit test: Orion docks with SpaceX Starship and Blue Origin Blue Moon test landers.",
+        window="mid-2027 (NASA target)",
+    ),
+    Mission(
+        naif_id=0,
+        name="Artemis IV",
+        nickname="Lunar south pole landing",
+        crewed=True,
+        launch_utc=None,
+        splashdown_utc=None,
+        status="upcoming",
+        crew=[],
+        description="First crewed Artemis lunar landing. Crew not yet named.",
+        window="2028 (NASA target)",
+    ),
 ]
+
+
+def current_artemis_mission() -> Mission:
+    """The mission to show live telemetry for: the active one, else the most
+    recent flown mission (upcoming missions have no ephemeris yet)."""
+    active = [m for m in ARTEMIS_MISSIONS if m.status == "active"]
+    if active:
+        return active[0]
+    flown = [m for m in ARTEMIS_MISSIONS if m.launch_utc and m.naif_id]
+    return max(flown, key=lambda m: m.launch_utc)  # type: ignore[arg-type,return-value]
+
+
+def next_artemis_mission() -> Optional[Mission]:
+    return next((m for m in ARTEMIS_MISSIONS if m.status == "upcoming"), None)
 
 # ── Deep space probe registry ──────────────────────────────────────────────────
 
@@ -127,6 +177,7 @@ class Probe:
     name: str
     launched: int   # year
     mission: str    # short description
+    status: str = "active"   # "active" or e.g. "ended Jun 2026" (not queried)
 
 
 # All queried Earth-centric (500@399) so distances reflect signal delay to Earth.
@@ -134,12 +185,14 @@ PROBES: list[Probe] = [
     Probe(-31,  "Voyager 1",          1977, "Interstellar — farthest human-made object"),
     Probe(-32,  "Voyager 2",          1977, "Interstellar — only probe at all 4 gas giants"),
     Probe(-98,  "New Horizons",       2006, "Kuiper Belt explorer"),
-    Probe(-61,  "Juno",               2011, "Jupiter orbiter"),
+    Probe(-61,  "Juno",               2011, "Jupiter orbiter — extended mission"),
     Probe(-96,  "Parker Solar Probe", 2018, "Solar corona — record close approach"),
-    Probe(-159, "Europa Clipper",     2024, "En route to Jupiter / Europa"),
-    Probe(-234, "Lucy",               2021, "Trojan asteroid explorer"),
-    Probe(-202, "MAVEN",              2013, "Mars atmosphere orbiter"),
-    Probe(-64,  "OSIRIS-APEX",        2016, "Asteroid Apophis rendezvous"),
+    Probe(-159, "Europa Clipper",     2024, "En route — Jupiter arrival Apr 2030"),
+    Probe(-255, "Psyche",             2023, "En route — metal asteroid 16 Psyche, Aug 2029"),
+    Probe(-49,  "Lucy",               2021, "Trojan asteroids — Eurybates flyby Aug 2027"),
+    Probe(-64,  "OSIRIS-APEX",        2016, "En route — Apophis rendezvous 2029"),
+    Probe(-202, "MAVEN",              2013, "Mars atmosphere orbiter — contact lost Dec 2025",
+          status="ended Jun 2026"),
 ]
 
 
@@ -261,6 +314,7 @@ class ISSTelemetry:
     lat: float
     lon: float
     crew: list[str] = field(default_factory=list)
+    expedition: int = 0
     error: str = ""
 
 
@@ -278,32 +332,53 @@ async def _fetch_dist_speed(
     at: Optional[datetime] = None,
 ) -> tuple[float, float]:
     """Return (distance_km, speed_km_s) or (0, 0) on failure."""
-    async with _HORIZONS_SEM:
-        try:
-            text = await fetch_vectors(client, naif_id, center=center, at=at)
-            result = distance_speed(text, at=at)
-            if result:
-                return result
-        except Exception:
-            pass
-        finally:
-            await asyncio.sleep(0.5)   # stagger slot releases
+    # Horizons intermittently drops requests under load — retry once before giving up.
+    for attempt in range(2):
+        async with _HORIZONS_SEM:
+            try:
+                text = await fetch_vectors(client, naif_id, center=center, at=at)
+                result = distance_speed(text, at=at)
+                if result:
+                    return result
+            except Exception:
+                pass
+            finally:
+                await asyncio.sleep(0.5)   # stagger slot releases
+        if attempt == 0:
+            await asyncio.sleep(1.5)
     return 0.0, 0.0
 
 
 # ── Data fetchers ──────────────────────────────────────────────────────────────
+
+def _met_seconds(mission: Mission, now: datetime) -> float:
+    """Mission elapsed time — frozen at splashdown once the mission is over."""
+    if not mission.launch_utc:
+        return 0.0
+    end = min(now, mission.splashdown_utc) if mission.splashdown_utc else now
+    return max((end - mission.launch_utc).total_seconds(), 0.0)
+
 
 async def fetch_artemis_telemetry(mission: Mission) -> ArtemisTelemetry:
     cache_key = f"artemis_{mission.naif_id}"
     cached = _cached(cache_key)
     if cached is not None:
         # Only update MET — keep timestamp_utc as the real fetch time so display shows data age
-        cached.met_seconds = max((datetime.now(tz=timezone.utc) - mission.launch_utc).total_seconds(), 0.0)
+        cached.met_seconds = _met_seconds(mission, datetime.now(tz=timezone.utc))
         return cached  # type: ignore[return-value]
 
     now = datetime.now(tz=timezone.utc)
-    met = (now - mission.launch_utc).total_seconds()
+    met = _met_seconds(mission, now)
     errors: list[str] = []
+
+    if mission.status == "completed":
+        # Orion's ephemeris ends at splashdown — nothing live to fetch.
+        result = ArtemisTelemetry(
+            mission=mission, timestamp_utc=now, dist_earth_km=0.0,
+            dist_moon_km=0.0, speed_km_s=0.0, met_seconds=met,
+        )
+        _cache_set(cache_key, result, ttl=3600)
+        return result
 
     async with httpx.AsyncClient() as client:
         (dist_earth, speed), (dist_moon, _) = await asyncio.gather(
@@ -340,6 +415,7 @@ async def fetch_iss_telemetry() -> ISSTelemetry:
     errors: list[str] = []
     lat = lon = 0.0
     crew: list[str] = []
+    expedition = 0
 
     async with httpx.AsyncClient() as client:
         horizons_task = asyncio.create_task(
@@ -354,12 +430,11 @@ async def fetch_iss_telemetry() -> ISSTelemetry:
             errors.append(f"lat/lon: {e}")
 
         try:
-            resp = await client.get(OPEN_NOTIFY_CREW, timeout=8)
-            crew = [
-                p["name"]
-                for p in resp.json().get("people", [])
-                if p.get("craft") == "ISS"
-            ]
+            resp = await client.get(CREW_API, timeout=8)
+            resp.raise_for_status()
+            data = resp.json()
+            crew = [p["name"] for p in data.get("people", []) if p.get("iss")]
+            expedition = int(data.get("iss_expedition") or 0)
         except Exception as e:
             errors.append(f"crew: {e}")
 
@@ -378,6 +453,7 @@ async def fetch_iss_telemetry() -> ISSTelemetry:
         lat=lat,
         lon=lon,
         crew=crew,
+        expedition=expedition,
         error="; ".join(errors),
     )
     # Only cache if we got real positional data
@@ -390,20 +466,23 @@ async def fetch_all_probes() -> list[ProbeTelemetry]:
     cached = _cached("probes")
     if cached is not None:
         return cached  # type: ignore[return-value]
+    live = [p for p in PROBES if p.status == "active"]
     async with httpx.AsyncClient() as client:
         results = await asyncio.gather(
-            *[_fetch_dist_speed(client, p.naif_id, "500@399") for p in PROBES],
+            *[_fetch_dist_speed(client, p.naif_id, "500@399") for p in live],
             return_exceptions=True,
         )
     out: list[ProbeTelemetry] = []
-    for probe, res in zip(PROBES, results):
+    for probe, res in zip(live, results):
         if isinstance(res, Exception) or not isinstance(res, tuple):
             out.append(ProbeTelemetry(probe=probe, dist_earth_km=0.0, speed_km_s=0.0, error=str(res)))
         else:
             dist, speed = res
             out.append(ProbeTelemetry(probe=probe, dist_earth_km=dist, speed_km_s=speed))
+    out += [ProbeTelemetry(probe=p, dist_earth_km=0.0, speed_km_s=0.0)
+            for p in PROBES if p.status != "active"]
     # Only cache if at least half the probes returned real data
-    if sum(1 for t in out if t.dist_earth_km) >= len(out) // 2:
+    if sum(1 for t in out if t.dist_earth_km) >= len(live) // 2:
         _cache_set("probes", out, ttl=86400)  # 24 hours — fetch once per session
     return out
 
@@ -412,7 +491,11 @@ async def _fetch_single_rover(
     client: httpx.AsyncClient,
     cfg: RoverConfig,
 ) -> RoverStatus:
-    dist_earth, _ = await _fetch_dist_speed(client, cfg.naif_id, "500@399")
+    # Rover ephemerides stop after landing (Perseverance's ends Feb 2026), so use
+    # Mars itself (NAIF 499) for Earth distance / signal delay. Skip ended missions.
+    dist_earth = 0.0
+    if cfg.status == "active":
+        dist_earth, _ = await _fetch_dist_speed(client, 499, "500@399")
     return RoverStatus(
         name=cfg.name,
         status=cfg.status,
@@ -563,6 +646,10 @@ def _build_artemis_panel(t: ArtemisTelemetry) -> Panel:
 
     grid.add_row("Data as of", _timestamp(t.timestamp_utc))
 
+    nxt = next_artemis_mission()
+    if nxt and m.status != "active":
+        grid.add_row("Next up", f"[cyan]{nxt.name}[/cyan] — {nxt.window}  [dim]{nxt.nickname}[/dim]")
+
     if t.error:
         grid.add_row("[yellow]Warning[/yellow]", t.error)
 
@@ -586,7 +673,10 @@ def _build_iss_panel(t: ISSTelemetry, show_map: bool = False, map_width: int = 1
     if t.lat or t.lon:
         stats.add_row("Position",  _lat_lon(t.lat, t.lon))
     if t.crew:
-        stats.add_row(f"Crew ({len(t.crew)})", "  |  ".join(t.crew))
+        label = f"Crew ({len(t.crew)})"
+        if t.expedition:
+            label = f"Expedition {t.expedition} ({len(t.crew)})"
+        stats.add_row(label, "  |  ".join(t.crew))
 
     stats.add_row("Data as of", _timestamp(t.timestamp_utc))
 
@@ -621,9 +711,12 @@ def _build_probes_panel(probes: list[ProbeTelemetry]) -> Panel:
     tbl.add_column("Distance",      min_width=12)
     tbl.add_column("Speed (km/s)",  min_width=12)
     tbl.add_column("Signal Delay",  min_width=12)
+    tbl.add_column("Status",        min_width=10)
 
     for t in probes:
-        if t.dist_earth_km:
+        if t.probe.status != "active":
+            dist_str = speed_str = delay_str = "[dim]—[/dim]"
+        elif t.dist_earth_km:
             dist_str  = _dist(t.dist_earth_km)
             speed_str = f"{t.speed_km_s:.2f}"
             delay_str = _delay(t.light_delay_min)
@@ -637,6 +730,8 @@ def _build_probes_panel(probes: list[ProbeTelemetry]) -> Panel:
             dist_str,
             speed_str,
             delay_str,
+            "[green]ACTIVE[/green]" if t.probe.status == "active"
+            else f"[dim]{t.probe.status.upper()}[/dim]",
         )
 
     return Panel(tbl, title="[bold]Deep Space Probes[/bold]", border_style="magenta", padding=(0, 1))
@@ -831,10 +926,7 @@ class NasaApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._active_mission = next(
-            (m for m in ARTEMIS_MISSIONS if m.status == "active"),
-            ARTEMIS_MISSIONS[-1],
-        )
+        self._active_mission = current_artemis_mission()
         self.refresh_data()
         self.set_interval(30, self.refresh_data)
 
@@ -901,7 +993,7 @@ def cmd_artemis_status(
     force: bool  = typer.Option(False, "--force", "-f", help="Bypass cache and fetch fresh data"),
 ) -> None:
     """Live telemetry for the current Artemis mission (JPL Horizons)."""
-    mission = next((m for m in ARTEMIS_MISSIONS if m.status == "active"), ARTEMIS_MISSIONS[-1])
+    mission = current_artemis_mission()
     while True:
         if force:
             _cache_clear()
@@ -935,7 +1027,10 @@ def cmd_artemis_missions() -> None:
     for m in ARTEMIS_MISSIONS:
         badge  = _status_badge(m.status)
         crewed = "[green]Yes[/]" if m.crewed else "[dim]No[/]"
-        launch = f"{m.launch_utc.strftime('%Y-%m-%d %H:%M')} UTC  ({_local_str(m.launch_utc)})"
+        launch = (
+            f"{m.launch_utc.strftime('%Y-%m-%d %H:%M')} UTC  ({_local_str(m.launch_utc)})"
+            if m.launch_utc else f"[cyan]{m.window or 'TBD'}[/cyan]"
+        )
         splash = (
             f"{m.splashdown_utc.strftime('%Y-%m-%d %H:%M')} UTC  ({_local_str(m.splashdown_utc)})"
             if m.splashdown_utc else "—"
@@ -998,6 +1093,44 @@ def cmd_launches(
         _cache_clear()
     launches = asyncio.run(fetch_upcoming_launches(n))
     console.print(_build_launches_panel(launches))
+
+
+REPO_URL = "https://github.com/damyanmp/nasa-tracker"
+
+
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("nasa-tracker")
+    except PackageNotFoundError:
+        return "dev"
+
+
+@app.command("version")
+def cmd_version() -> None:
+    """Show the installed nasa-tracker version."""
+    console.print(f"nasa-tracker {_version()}")
+
+
+@app.command("update")
+def cmd_update() -> None:
+    """Update nasa-tracker to the latest version on GitHub (via uv)."""
+    import shutil
+    import subprocess
+
+    uv = shutil.which("uv")
+    if not uv:
+        console.print("[red]uv not found.[/red] Re-run the installer:\n"
+                      f"  curl -fsSL https://raw.githubusercontent.com/damyanmp/nasa-tracker/main/install.sh | bash")
+        raise typer.Exit(1)
+    before = _version()
+    console.print(f"Updating nasa-tracker (currently {before})…")
+    # --reinstall forces a fresh fetch of the git source even if the version string is unchanged.
+    rc = subprocess.call([uv, "tool", "install", "--force", "--reinstall", f"git+{REPO_URL}"])
+    if rc != 0:
+        console.print("[red]Update failed.[/red]")
+        raise typer.Exit(rc)
+    console.print("[green]Done.[/green] Run [bold]nasa version[/bold] to confirm.")
 
 
 @app.command("tui")
