@@ -42,6 +42,7 @@ nasa launches           # Upcoming launches
 | JPL Horizons API (`ssd.jpl.nasa.gov/api/horizons.api`) | Spacecraft position/velocity vectors |
 | open-notify.org | ISS real-time lat/lon (its crew endpoint went stale in 2024 — don't use) |
 | corquaid.github.io/international-space-station-APIs | Current ISS crew + expedition number |
+| Launch Library 2 (`ll.thespacedevs.com`, program 15) | Artemis missions: dates, status, crew. Free tier ~15 req/h → disk cache `~/.cache/nasa-tracker/artemis.json`, 6h TTL, stale cache reused offline |
 | rocketlaunch.live | Upcoming launch schedule |
 
 ## Key Design Decisions
@@ -63,7 +64,11 @@ nasa launches           # Upcoming launches
 
 ## Hand-maintained data (review when refreshing)
 
-`nasa.py` has three registries that do NOT update themselves: `ARTEMIS_MISSIONS`,
-`PROBES`, `ROVERS`. Check mission status/dates against NASA before releasing.
+Artemis data is live from Launch Library 2 (`lib/launchlibrary.py`);
+`ARTEMIS_MISSIONS` in `nasa.py` is only the offline fallback. Orion Horizons IDs
+are resolved automatically by COSPAR designator once JPL publishes them.
+
+`PROBES` and `ROVERS` do NOT update themselves (no good live source for mission
+status). Check them against NASA before releasing.
 Verify any new NAIF ID with a Horizons query ("Target body name" line) — e.g.
 Lucy is -49 (-234 is STEREO-A).

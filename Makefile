@@ -1,4 +1,4 @@
-.PHONY: install run clean
+.PHONY: install run test clean
 
 install:
 	uv venv
@@ -6,6 +6,9 @@ install:
 
 run:
 	uv run nasa
+
+test:
+	uv run --with pytest pytest -q tests
 
 clean:
 	rm -rf .venv

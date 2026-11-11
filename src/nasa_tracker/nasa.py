@@ -35,6 +35,7 @@ from rich.table import Table
 from rich.text import Text
 
 from nasa_tracker.lib.horizons import fetch_vectors, distance_speed
+from nasa_tracker.lib.launchlibrary import fetch_artemis
 from nasa_tracker.lib.worldmap import render_map as _worldmap_render
 
 console = Console()
@@ -92,6 +93,11 @@ class Mission:
     description: str = ""
     window: str = ""     # target window for upcoming missions without a date
 
+
+# Built-in fallback only. At runtime this list is replaced with live data from
+# Launch Library 2 (see refresh_artemis_missions); it is used as-is only when
+# LL2 is unreachable and there is no on-disk cache.
+ARTEMIS_SOURCE = "built-in list (offline)"
 
 ARTEMIS_MISSIONS: list[Mission] = [
     Mission(
@@ -156,13 +162,42 @@ ARTEMIS_MISSIONS: list[Mission] = [
 ]
 
 
+async def refresh_artemis_missions(force: bool = False) -> None:
+    """Replace ARTEMIS_MISSIONS in place with Launch Library 2 data."""
+    global ARTEMIS_SOURCE
+    data, note = await fetch_artemis(force=force)
+    if not data:
+        ARTEMIS_SOURCE = f"built-in list — {note}"
+        return
+    def dt(v: Optional[str]) -> Optional[datetime]:
+        return datetime.fromisoformat(v) if v else None
+    ARTEMIS_MISSIONS[:] = [
+        Mission(
+            naif_id=int(m.get("naif_id") or 0),
+            name=m["name"],
+            nickname=m.get("nickname") or "",
+            crewed=bool(m.get("crewed")),
+            launch_utc=dt(m.get("launch_utc")),
+            splashdown_utc=dt(m.get("splashdown_utc")),
+            status=m.get("status") or "upcoming",
+            crew=list(m.get("crew") or []),
+            description=m.get("description") or "",
+            window=m.get("window") or "",
+        )
+        for m in data
+    ]
+    ARTEMIS_SOURCE = note
+
+
 def current_artemis_mission() -> Mission:
     """The mission to show live telemetry for: the active one, else the most
     recent flown mission (upcoming missions have no ephemeris yet)."""
     active = [m for m in ARTEMIS_MISSIONS if m.status == "active"]
     if active:
         return active[0]
-    flown = [m for m in ARTEMIS_MISSIONS if m.launch_utc and m.naif_id]
+    flown = [m for m in ARTEMIS_MISSIONS if m.launch_utc and m.status != "upcoming"]
+    if not flown:
+        return ARTEMIS_MISSIONS[0]
     return max(flown, key=lambda m: m.launch_utc)  # type: ignore[arg-type,return-value]
 
 
@@ -371,7 +406,14 @@ async def fetch_artemis_telemetry(mission: Mission) -> ArtemisTelemetry:
     met = _met_seconds(mission, now)
     errors: list[str] = []
 
-    if mission.status == "completed":
+    if mission.status == "active" and not mission.naif_id:
+        return ArtemisTelemetry(
+            mission=mission, timestamp_utc=now, dist_earth_km=0.0,
+            dist_moon_km=0.0, speed_km_s=0.0, met_seconds=met,
+            error="JPL has no ephemeris for this Orion yet — live distance appears once it's published",
+        )
+
+    if mission.status in ("completed", "failed"):
         # Orion's ephemeris ends at splashdown — nothing live to fetch.
         result = ArtemisTelemetry(
             mission=mission, timestamp_utc=now, dist_earth_km=0.0,
@@ -598,8 +640,8 @@ def _timestamp(dt: datetime) -> str:
 
 
 def _status_badge(status: str) -> Text:
-    colors = {"active": "bold green", "completed": "dim", "upcoming": "bold cyan"}
-    labels = {"active": "ACTIVE", "completed": "COMPLETED", "upcoming": "UPCOMING"}
+    colors = {"active": "bold green", "completed": "dim", "upcoming": "bold cyan", "failed": "bold red"}
+    labels = {"active": "ACTIVE", "completed": "COMPLETED", "upcoming": "UPCOMING", "failed": "FAILED"}
     return Text(f" {labels.get(status, status.upper())} ", style=colors.get(status, "white"))
 
 
@@ -648,7 +690,11 @@ def _build_artemis_panel(t: ArtemisTelemetry) -> Panel:
 
     nxt = next_artemis_mission()
     if nxt and m.status != "active":
-        grid.add_row("Next up", f"[cyan]{nxt.name}[/cyan] — {nxt.window}  [dim]{nxt.nickname}[/dim]")
+        when = nxt.window or (nxt.launch_utc.strftime("%Y-%m-%d %H:%M UTC") if nxt.launch_utc else "TBD")
+        grid.add_row("Next up", f"[cyan]{nxt.name}[/cyan] — {when}  [dim]{nxt.nickname}[/dim]")
+        if nxt.crew:
+            grid.add_row("", f"[dim]Crew: {', '.join(nxt.crew)}[/dim]")
+    grid.add_row("Source", f"[dim]{ARTEMIS_SOURCE}[/dim]")
 
     if t.error:
         grid.add_row("[yellow]Warning[/yellow]", t.error)
@@ -927,6 +973,7 @@ class NasaApp(App):
 
     def on_mount(self) -> None:
         self._active_mission = current_artemis_mission()
+        self._artemis_checked = 0.0
         self.refresh_data()
         self.set_interval(30, self.refresh_data)
 
@@ -946,6 +993,11 @@ class NasaApp(App):
 
     @textual_work(exclusive=True)
     async def refresh_data(self) -> None:
+        # Mission list comes from LL2 (disk-cached 6h) — re-check every 10 min.
+        if time.monotonic() - self._artemis_checked > 600:
+            await refresh_artemis_missions()
+            self._artemis_checked = time.monotonic()
+            self._active_mission = current_artemis_mission()
         artemis_t, iss_t, probes, rovers, launches = await asyncio.gather(
             fetch_artemis_telemetry(self._active_mission),
             fetch_iss_telemetry(),
@@ -993,6 +1045,7 @@ def cmd_artemis_status(
     force: bool  = typer.Option(False, "--force", "-f", help="Bypass cache and fetch fresh data"),
 ) -> None:
     """Live telemetry for the current Artemis mission (JPL Horizons)."""
+    asyncio.run(refresh_artemis_missions(force=force))
     mission = current_artemis_mission()
     while True:
         if force:
@@ -1010,8 +1063,11 @@ def cmd_artemis_status(
 
 
 @artemis_app.command("missions")
-def cmd_artemis_missions() -> None:
-    """List all Artemis missions."""
+def cmd_artemis_missions(
+    force: bool = typer.Option(False, "--force", "-f", help="Bypass the 6h cache and re-fetch from Launch Library 2"),
+) -> None:
+    """List all Artemis missions (live from Launch Library 2)."""
+    asyncio.run(refresh_artemis_missions(force=force))
     tbl = Table(
         box=box.SIMPLE_HEAD, show_header=True, header_style="bold",
         show_edge=False, pad_edge=False,
@@ -1027,6 +1083,8 @@ def cmd_artemis_missions() -> None:
     for m in ARTEMIS_MISSIONS:
         badge  = _status_badge(m.status)
         crewed = "[green]Yes[/]" if m.crewed else "[dim]No[/]"
+        if m.crewed and not m.crew and m.status == "upcoming":
+            crewed = "[green]Yes[/] [dim](TBA)[/]"
         launch = (
             f"{m.launch_utc.strftime('%Y-%m-%d %H:%M')} UTC  ({_local_str(m.launch_utc)})"
             if m.launch_utc else f"[cyan]{m.window or 'TBD'}[/cyan]"
@@ -1035,9 +1093,13 @@ def cmd_artemis_missions() -> None:
             f"{m.splashdown_utc.strftime('%Y-%m-%d %H:%M')} UTC  ({_local_str(m.splashdown_utc)})"
             if m.splashdown_utc else "—"
         )
-        tbl.add_row(m.name, m.nickname, crewed, launch, splash, badge, m.description)
+        desc = m.description if len(m.description) <= 160 else m.description[:157].rstrip() + "…"
+        if m.crew:
+            desc = f"{desc}\n[dim]Crew: {', '.join(m.crew)}[/dim]"
+        tbl.add_row(m.name, m.nickname, crewed, launch, splash, badge, desc)
 
     console.print(tbl)
+    console.print(f"[dim]Source: {ARTEMIS_SOURCE}[/dim]")
 
 
 @app.command("iss")

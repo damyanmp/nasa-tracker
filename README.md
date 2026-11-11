@@ -42,6 +42,12 @@ curl -fsSL https://raw.githubusercontent.com/damyanmp/nasa-tracker/main/update.s
 
 Check what you have with `nasa version`.
 
+## Data
+
+Live on every run: ISS position & crew, spacecraft distances (NASA/JPL Horizons),
+upcoming launches, and Artemis mission dates/status/crew (Launch Library 2, cached 6h).
+The probe and rover lists are curated in the code.
+
 ## Usage
 
 ```
